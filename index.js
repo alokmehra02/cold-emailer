@@ -5,15 +5,6 @@ const { google } = require("googleapis");
 const nodemailer = require("nodemailer");
 const cron = require("node-cron");
 const axios = require("axios");
-const dayjs = require("dayjs");
-const OpenAI = require("openai");
-
-console.log("USER:", process.env.GMAIL_USER);
-console.log("PASS:", process.env.GMAIL_PASS);
-
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
 
 // ---------------- GOOGLE SHEETS (OAUTH) ----------------
 
@@ -24,8 +15,7 @@ async function authorize() {
   const content = fs.readFileSync("client_secret_416199702620-dun720o4ln807reu72t4836bsk4t9f7k.apps.googleusercontent.com.json");
   const credentials = JSON.parse(content);
 
-  const { client_secret, client_id, redirect_uris } =
-    credentials.installed;
+  const { client_secret, client_id, redirect_uris } = credentials.installed;
 
   const oAuth2Client = new google.auth.OAuth2(
     client_id,
@@ -104,9 +94,9 @@ async function sendEmail(to, subject, text, threadId = null) {
     text,
     headers: threadId
       ? {
-          "In-Reply-To": threadId,
-          References: threadId,
-        }
+        "In-Reply-To": threadId,
+        References: threadId,
+      }
       : {},
   };
 
@@ -114,54 +104,27 @@ async function sendEmail(to, subject, text, threadId = null) {
   return info.messageId;
 }
 
-// ---------------- OPENAI (SMART PERSONALIZATION) ----------------
+// ---------------- EMAIL TEMPLATE ----------------
 
-async function generateEmail({ name, title, company }) {
-  const prompt = `
-You are helping a backend engineer send a cold email for job opportunities.
+function generateEmail({ name, company }) {
+  const fullBody =
+    `Hi ${name},\r\n` +
+    `\r\n` +
+    `I'm Aalok, a backend engineer with close to 2 years of experience at Tudip Technologies and a graduate of National Institute of Technology Bhopal. Over the past couple of years, I've built and shipped backend systems across multiple domains — from real-time IoT platforms to event-driven cloud infrastructure — working closely with product and engineering teams to deliver things that actually work at scale.\r\n` +
+    `\r\n` +
+    `I'm exploring new roles where I can contribute immediately — whether in backend engineering, infrastructure, product, or any role that values ownership and strong execution. Based on what ${company} is building, I'd love to see if there might be a potential fit.\r\n` +
+    `\r\n` +
+    `Here are my details:\r\n` +
+    `Resume: ${process.env.RESUME_LINK}\r\n` +
+    `Calendar: ${process.env.CALENDAR_LINK}\r\n` +
+    `\r\n` +
+    `Best,\r\n` +
+    `Aalok`;
 
-Candidate background:
-- Backend Engineer (Node.js, Microservices, Distributed Systems)
-- Experience with AWS, GCP, Kubernetes
-- Strong in scalable systems and APIs
-- Looking for SDE / Backend roles in startups or product companies
-
-Write a highly personalized cold email.
-
-Target:
-Name: ${name}
-Title: ${title}
-Company: ${company}
-
-Rules:
-- Max 120 words
-- Mention how candidate can add value to THEIR company
-- Make it sound human (not AI)
-- No buzzwords, no fluff
-- Soft ask at end
-
-Include:
-- Personalized intro
-- Why relevant to them
-- Value proposition
-- Resume link
-
-Resume link:
-${process.env.RESUME_LINK}
-
-Output JSON:
-{
-  "subject": "...",
-  "body": "..."
-}
-`;
-
-  const response = await openai.chat.completions.create({
-    model: "gpt-5-mini",
-    messages: [{ role: "user", content: prompt }],
-  });
-
-  return JSON.parse(response.choices[0].message.content);
+  return {
+    subject: "Exploring Opportunities on Your Team",
+    body: fullBody,
+  };
 }
 
 // ---------------- TELEGRAM ----------------
@@ -181,7 +144,6 @@ async function notify(msg) {
 async function processLeads() {
   const rows = await getRows();
 
-  // 👉 Only pick ONE lead (rate limiting)
   const row = rows.find(r => r[5] === "NEW");
 
   if (!row) {
@@ -189,23 +151,22 @@ async function processLeads() {
     return;
   }
 
-  const [sno, name, email, title, company, status, lastSent, threadId] =
-    row;
-
+  const [sno, name, email, title, company, status, lastSent, threadId] = row;
   const rowIndex = rows.indexOf(row) + 2;
 
   try {
-    const emailData = await generateEmail({ name, title, company });
+    const emailData = generateEmail({ name, company }); // no await — not async anymore
 
     const msgId = await sendEmail(
       email,
       emailData.subject,
-      emailData.body
+      emailData.body,
+      threadId || null
     );
 
     await updateRow(rowIndex, [
       "SENT",
-      new Date().toISOString(),
+      new Date().toLocaleString("en-US", { timeZone: "Asia/Kolkata" }),
       msgId,
     ]);
 
@@ -221,11 +182,10 @@ async function processLeads() {
 async function start() {
   await initSheets();
 
-  // run once immediately
   await processLeads();
 
   // ⏱ every 15 minutes → 1 email
-cron.schedule("*/10 7-21 * * *", async () => {
+  cron.schedule("*/10 7-21 * * *", async () => {
     console.log("⏱ Sending next email...");
     await processLeads();
   });
